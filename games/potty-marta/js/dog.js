@@ -227,7 +227,8 @@ function earShape(B, M, sx){
 
 function mkBone(name, pos, parent, par){ const b = new THREE.Bone(); b.name = name; b.userData.rest = pos.slice(); b.position.set(pos[0] - par[0], pos[1] - par[1], pos[2] - par[2]); if (parent) parent.add(b); return b; }
 
-PM.buildDog = function(key){
+PM.buildDog = function(key, q){
+  q = q || 1; // detail divisor: 1 = finest; larger = fewer vertices
   const B = PM.BREEDS[key], M = marks(B);
   const fur = PM.furMaterial(B.fur);
   const root = new THREE.Group(); root.name = key;
@@ -251,7 +252,7 @@ PM.buildDog = function(key){
   // ---- body mesh
   const shape = bodyShape(B, M);
   if (tp){ for (let i = 0; i < 3; i++){ const r0 = (B.tail === 'thin' ? 0.018 : 0.03) * (1 - i * 0.25), r1 = r0 * 0.75; shape.cone(tp[i], tp[i + 1], r0, r1, B.fluff ? { k: 0.02, dispAmp: B.fluff * 1.5, disp: (x, y, z) => B.fluff * 1.5 * N(x, y, z, 30) } : { k: 0.02 }); } }
-  const cell = B.H > 0.4 ? 0.0075 : 0.0055;
+  const cell = (B.H > 0.4 ? 0.0075 : 0.0055) * q;
   const geo = PM.meshShape(shape, cell);
   const mf = maskFn(B, M);
   PM.vertexAttr(geo, 'aMask', 4, (x, y, z, o) => mf(x, y, z, o));
@@ -278,7 +279,8 @@ PM.buildDog = function(key){
   if (tp){ segs.push({ bone: idx('tail1'), a: tp[1], b: tp[2], r: 0.02 }); segs.push({ bone: idx('tail2'), a: tp[2], b: tp[3], r: 0.02 }); segs.push({ bone: idx('tail3'), a: tp[3], b: tp[3], r: 0.02 }); }
   PM.skinWeights(geo, segs);
   const body = new THREE.SkinnedMesh(geo, fur);
-  body.castShadow = true; body.receiveShadow = true; body.frustumCulled = false;
+  body.castShadow = true; body.receiveShadow = true;
+  geo.computeBoundingSphere(); geo.boundingSphere.radius *= 1.9; geo.boundingSphere.center.y = B.H * 0.5; // generous: bones move the mesh away from the bind pose
   root.add(body);
   root.updateMatrixWorld(true);
   const skeleton = new THREE.Skeleton(bones);
@@ -288,7 +290,7 @@ PM.buildDog = function(key){
   const head = by.head, hd = M.Hd;
   const rigid = (geo2, mat, parent, origin) => { PM.localize(geo2, origin); const m = new THREE.Mesh(geo2, mat); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; };
   const hs = headShape(B, M);
-  const hg = PM.meshShape(hs, 0.0033 * Math.max(1, B.hs * 0.9));
+  const hg = PM.meshShape(hs, 0.0033 * Math.max(1, B.hs * 0.9) * Math.sqrt(q));
   PM.vertexAttr(hg, 'aMask', 4, (x, y, z, o) => mf(x, y, z, o));
   rigid(hg, fur, head, hd);
   // nose

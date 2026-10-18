@@ -7,7 +7,7 @@ const C = c => new THREE.Color(c);
 
 /* ---------- Layout (metres; north = -z) ---------- */
 const PARK = { x0: -46, x1: 46, z0: -33, z1: 33 };
-const DOG = { x0: 13, x1: 34, z0: -24, z1: -8, gate: { x: 13, z: -16, w: 1.6 } };
+const DOG = { x0: 13, x1: 34, z0: -24, z1: -8, gate: { x: 13, z: -16, w: 2.8 } };
 const PLAY = { x0: -34, x1: -20, z0: 9, z1: 22 };
 const COURT = { x0: -34, x1: -19, z0: -25, z1: -12 };
 const FOUNT = { x: 5, z: 3 };
@@ -39,7 +39,7 @@ const WALK = [
 const BASIL = { x0: -40, x1: -1.2, z0: 51.4, z1: 162 };
 const MONDADORI = { x0: 84, x1: 104, z0: 151.5, z1: 166.6, door: { x: 94, z: 151.6 } };
 const ROUTE_WP = [
-  { x: 13, z: 169.6, name: 'via Santa Sofia' }, { x: -1.6, z: 169.6, name: 'Corso Italia' }, { x: -6, z: 120, name: 'Parco delle Basiliche' },
+  { x: 91, z: 168.8, name: 'piazza Mondadori' }, { x: 13, z: 169.6, name: 'via Santa Sofia' }, { x: -1.6, z: 169.6, name: 'Corso Italia' }, { x: -6, z: 120, name: 'Parco delle Basiliche' },
   { x: -1.8, z: 50.2, name: 'Parco delle Basiliche' }, { x: 0, z: 38.6, name: 'via Molino delle Armi' }, { x: 0, z: 30, name: 'Parco Vetra' }
 ];
 PM.LAYOUT = { PARK, DOG, PLAY, COURT, FOUNT, ENTR, LOOP, ROADS, WALK, BASIL, MONDADORI, ROUTE_WP };
@@ -99,6 +99,7 @@ const GLSL = PM.GLSL_NOISE;
 
 PM.buildWorld = function(scene, opt){
   opt = opt || {};
+  SPL.res = opt.lowFoliage ? 1024 : 2048; // lighter ground map on phones
   const W = { colliders: { circles: [], boxes: [], segs: [] }, scent: [], benches: [], updaters: [], lamps: [], pigeons: [], props: {} };
   const splat = buildSplat(); W.splat = splat;
   W.surface = function(x, z){ // returns {lawn, gravel, dirt, stone}
@@ -160,7 +161,7 @@ ${GLSL}`).replace('#include <color_fragment>', `#include <color_fragment>
     blade.setAttribute('normal', new THREE.Float32BufferAttribute(new Array(pos.length).fill(0).map((v, i) => i % 3 === 1 ? 1 : 0), 3));
     blade.setIndex(blade.userData.tris);
     const ig = new THREE.InstancedBufferGeometry(); ig.index = blade.index; ig.attributes.position = blade.attributes.position; ig.attributes.normal = blade.attributes.normal;
-    const N = opt.lowGrass ? 32000 : 80000, T = opt.lowGrass ? 28 : 36;
+    const N = opt.lowGrass ? 15000 : 80000, T = opt.lowGrass ? 24 : 36;
     const off = new Float32Array(N * 4);
     for (let i = 0; i < N; i++){ off[i * 4] = R() * T; off[i * 4 + 1] = R() * T; off[i * 4 + 2] = R() * TAU; off[i * 4 + 3] = 0.7 + R() * 0.6; }
     ig.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 4));
@@ -241,6 +242,7 @@ vGC = mix(vec3(0.17, 0.27, 0.08), mix(vec3(0.3, 0.44, 0.13), vec3(0.4, 0.47, 0.1
     g.applyMatrix4(tmpM.compose(a, tmpQ, tmpS.set(1, 1, 1)));
     list.push(g);
   }
+  const FM = opt.lowFoliage ? 0.5 : 1;
   function tree(x, z, kind, scale){
     const s = scale || 1, rr = PM.rng((x * 1000 + z * 17) | 0);
     const trunkList = kind === 'plane' ? trunkGeos.plane : trunkGeos.dark;
@@ -253,7 +255,7 @@ vGC = mix(vec3(0.17, 0.27, 0.08), mix(vec3(0.3, 0.44, 0.13), vec3(0.4, 0.47, 0.1
         const a = rr() * TAU, l = (2 + rr() * 2.5) * s, y = H - rr() * 3 * s;
         const p0 = new V3(x, y, z).addScaledVector(lean, y / H), p1 = p0.clone().add(new V3(Math.cos(a) * l, 0.6 + rr() * 1.2, Math.sin(a) * l));
         branch(trunkList, p0, p1, 0.1 * s, 0.05 * s);
-        for (let k = 0; k < 14; k++){ const c = p1.clone().add(new V3((rr() - 0.5) * 2.4 * s, (rr() - 0.2) * 0.9 * s, (rr() - 0.5) * 2.4 * s)); leaves.push([c.x, c.y, c.z, (1.3 + rr()) * s, rr() * TAU, rr()]); }
+        for (let k = 0; k < Math.round(14 * FM); k++){ const c = p1.clone().add(new V3((rr() - 0.5) * 2.4 * s, (rr() - 0.2) * 0.9 * s, (rr() - 0.5) * 2.4 * s)); leaves.push([c.x, c.y, c.z, (1.3 + rr()) * s, rr() * TAU, rr()]); }
       }
       W.colliders.circles.push({ x, z, r: 0.35 * s });
       return { x, z, h: H };
@@ -272,10 +274,10 @@ vGC = mix(vec3(0.17, 0.27, 0.08), mix(vec3(0.3, 0.44, 0.13), vec3(0.4, 0.47, 0.1
         const b = a + (rr() - 0.5) * 1.6;
         const p2 = p1.clone().add(new V3(Math.cos(b) * crownR * 0.4, crownR * (0.15 + rr() * 0.3), Math.sin(b) * crownR * 0.4));
         branch(trunkList, p1, p2, r0 * 0.3, r0 * 0.12);
-        const nCards = kind === 'plane' ? 22 : 18;
+        const nCards = Math.round((kind === 'plane' ? 22 : 18) * FM);
         for (let k = 0; k < nCards; k++){
           const c = p2.clone().add(new V3((rr() - 0.5) * 3.2 * s, (rr() - 0.35) * 2.4 * s, (rr() - 0.5) * 3.2 * s));
-          leaves.push([c.x, c.y, c.z, (1.5 + rr() * 1.1) * s, rr() * TAU, rr()]);
+          leaves.push([c.x, c.y, c.z, (1.5 + rr() * 1.1) * s * (FM < 1 ? 1.35 : 1), rr() * TAU, rr()]);
         }
       }
     }
@@ -596,7 +598,7 @@ transformed.x += sw * (position.y + 0.5); transformed.z += sw * 0.6 * (position.
 
   /* ----- The walk: roads, crossings with traffic lights, traffic, street furniture ----- */
   W.bins = [];
-  W.lights = { molino: { state: 'red', t: 4, ped: 9, car: 12 }, italia: { state: 'red', t: 7, ped: 9, car: 12 } };
+  W.lights = { molino: { state: 'red', t: 4, ped: 12, car: 9 }, italia: { state: 'red', t: 6, ped: 12, car: 9 } };
   (function(){
     const white = new THREE.MeshStandardMaterial({ color: '#e9e7df', roughness: 0.8 });
     const yellow = new THREE.MeshStandardMaterial({ color: '#e8c33a', roughness: 0.8 });
@@ -715,6 +717,11 @@ transformed.x += sw * (position.y + 0.5); transformed.z += sw * 0.6 * (position.
     for (const r of WALK){ if (x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1){ if (!r.cross || W.lights[r.cross].state === 'green') return true; } }
     return false;
   };
+  W.camOK = function(x, z){
+    for (const r of WALK){ if (x >= r.x0 - 1.3 && x <= r.x1 + 1.3 && z >= r.z0 - 1.3 && z <= r.z1 + 1.3) return true; }
+    for (const k in ROADS){ const r = ROADS[k]; if (x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) return true; }
+    return false;
+  };
   W.atCrossing = function(x, z){ for (const r of WALK){ if (r.cross && x >= r.x0 - 1.4 && x <= r.x1 + 1.4 && z >= r.z0 - 1.4 && z <= r.z1 + 1.4) return r.cross; } return null; };
   W.inRoad = function(x, z){ for (const r of WALK){ if (r.cross && x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) return r.cross; } return null; };
 
@@ -775,11 +782,16 @@ PM.collide = function(W, pos, r, opts){
   }
   if (opts.park !== false && !opts.free){ const P = PM.LAYOUT.PARK; if (opts.parkOnly){ pos.x = Math.max(P.x0 + 1.0, Math.min(P.x1 - 1.0, pos.x)); pos.z = Math.max(P.z0 + 1.0, Math.min(P.z1 - 1.0, pos.z)); } }
 };
+/* Outside the walkable area? Project to the nearest legal point: keeps the full tangential speed, so the walker slides along the edge instead of sticking. */
 PM.keepWalkable = function(W, prev, pos){
   if (W.walkable(pos.x, pos.z)) return;
-  if (W.walkable(pos.x, prev.z)){ pos.z = prev.z; return; }
-  if (W.walkable(prev.x, pos.z)){ pos.x = prev.x; return; }
-  if (W.walkable(prev.x, prev.z)){ pos.x = prev.x; pos.z = prev.z; return; }
+  let bx = prev.x, bz = prev.z, bd = 1e9;
+  for (const r of PM.LAYOUT.WALK){
+    if (r.cross && W.lights[r.cross].state !== 'green') continue;
+    const cx = Math.max(r.x0, Math.min(r.x1, pos.x)), cz = Math.max(r.z0, Math.min(r.z1, pos.z)), d = (cx - pos.x) * (cx - pos.x) + (cz - pos.z) * (cz - pos.z);
+    if (d < bd){ bd = d; bx = cx; bz = cz; }
+  }
+  pos.x = bx; pos.z = bz;
 };
 PM.inDogArea = (x, z) => { const D = PM.LAYOUT.DOG; return x > D.x0 && x < D.x1 && z > D.z0 && z < D.z1; };
 })();

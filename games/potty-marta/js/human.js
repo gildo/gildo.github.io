@@ -248,7 +248,8 @@ function stylisedHead(P, Q, headBone, hd){
 function mkBone(name, pos, parent){ const b = new THREE.Bone(); b.name = name; b.userData.rest = pos.slice(); const pp = parent ? parent.userData.rest : [0, 0, 0]; b.position.set(pos[0] - pp[0], pos[1] - pp[1], pos[2] - pp[2]); if (parent) parent.add(b); return b; }
 const C = c => new THREE.Color(c);
 
-PM.buildHuman = function(key){
+PM.buildHuman = function(key, q){
+  q = q || 1;
   const P = PM.PEOPLE[key], Q = parts(P), L = Q.L;
   const root = new THREE.Group(); root.name = key;
   const bones = [], by = {};
@@ -259,7 +260,7 @@ PM.buildHuman = function(key){
   const mat = PM.humanMaterial();
   // body
   const BS = bodyShapes(P, Q);
-  const geo = PM.meshShape(BS.all, 0.0072);
+  const geo = PM.meshShape(BS.all, 0.0072 * q);
   const cols = { skin: C(P.skin), top: C(P.top), pants: C(P.pants), shoes: C(P.shoes) };
   const regs = ['skin', 'top', 'pants', 'shoes'];
   const regOf = (x, y, z) => { let best = 'skin', bd = 1e9; for (const r of regs){ const d = BS.reg[r].eval(x, y, z); if (d < bd){ bd = d; best = r; } } return best; };
@@ -298,7 +299,8 @@ PM.buildHuman = function(key){
     segs.push({ bone: idx('ft' + sd), a: R('ft' + sd), b: R('to' + sd), r: 0.045, gate: (x, y, z) => side(x) * ss(0.13 * k, 0.09 * k, y) });
   }
   PM.skinWeights(geo, segs);
-  const body = new THREE.SkinnedMesh(geo, mat); body.castShadow = true; body.receiveShadow = true; body.frustumCulled = false;
+  const body = new THREE.SkinnedMesh(geo, mat); body.castShadow = true; body.receiveShadow = true;
+  geo.computeBoundingSphere(); geo.boundingSphere.radius *= 1.6; geo.boundingSphere.center.y = 0.9 * k;
   root.add(body); root.updateMatrixWorld(true);
   body.bind(new THREE.Skeleton(bones));
   // head: friendly stylised look (the first version's spirit), on the realistic body

@@ -22,11 +22,14 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: !isTouch, powerPre
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isTouch ? 1.5 : 2));
 renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = isTouch ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(52, 1, 0.05, 1500);
 function resize(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.fov = w < h ? 64 : 52; camera.updateProjectionMatrix(); }
 addEventListener('resize', resize); resize();
+
+/* Mesh detail divisors (bigger = fewer vertices). Characters were ~580k vertices drawn twice per frame, far too heavy for phones. */
+const QD = isTouch ? { potty: 1.5, marta: 1.9, dog: 2.1, human: 2.6 } : { potty: 1, marta: 1.25, dog: 1.5, human: 1.8 };
 
 /* ---------- Game state ---------- */
 const DAY = 480, H0 = 16.5, H1 = 19.5;
@@ -67,15 +70,15 @@ const P = { carrying: null, action: null, leashed: true, inArea: false, sprint: 
 const MS = { mode: 'follow', hasBall: false, sayCd: 0, target: null, busy: 0 };
 async function load(){
   const steps = [
-    ['Preparo il Parco Vetra…', () => { W = PM.buildWorld(scene, { lowGrass: isTouch, lowShadow: isTouch }); }],
-    ['Potty si stiracchia…', () => { potty = PM.buildDog('potty'); scene.add(potty.root); }],
-    ['Marta si lega lo chignon…', () => { marta = PM.buildHuman('marta'); scene.add(marta.root); }],
-    ['Arriva Biscotto…', () => { dogs.biscotto = PM.buildDog('biscotto'); }],
-    ['Arriva Luna…', () => { dogs.luna = PM.buildDog('luna'); }],
-    ['Pepe brontola…', () => { dogs.pepe = PM.buildDog('pepe'); }],
-    ['Olivia sbuffa…', () => { dogs.olivia = PM.buildDog('olivia'); }],
-    ['Giulia porta i suoi cani…', () => { giulia = PM.buildHuman('giulia'); scene.add(giulia.root); }],
-    ['Il signor Franco si siede in panchina…', () => { franco = PM.buildHuman('franco'); scene.add(franco.root); }],
+    ['Preparo il Parco Vetra…', () => { W = PM.buildWorld(scene, { lowGrass: isTouch, lowShadow: isTouch, lowFoliage: isTouch }); }],
+    ['Potty si stiracchia…', () => { potty = PM.buildDog('potty', QD.potty); scene.add(potty.root); }],
+    ['Marta si lega lo chignon…', () => { marta = PM.buildHuman('marta', QD.marta); scene.add(marta.root); }],
+    ['Arriva Biscotto…', () => { dogs.biscotto = PM.buildDog('biscotto', QD.dog); }],
+    ['Arriva Luna…', () => { dogs.luna = PM.buildDog('luna', QD.dog); }],
+    ['Pepe brontola…', () => { dogs.pepe = PM.buildDog('pepe', QD.dog); }],
+    ['Olivia sbuffa…', () => { dogs.olivia = PM.buildDog('olivia', QD.dog); }],
+    ['Giulia porta i suoi cani…', () => { giulia = PM.buildHuman('giulia', QD.human); scene.add(giulia.root); }],
+    ['Il signor Franco si siede in panchina…', () => { franco = PM.buildHuman('franco', QD.human); scene.add(franco.root); }],
     ['Ultimi ritocchi…', () => { for (const k in dogs) scene.add(dogs[k].root); buildProps(); }]
   ];
   for (let i = 0; i < steps.length; i++){
@@ -84,7 +87,7 @@ async function load(){
     steps[i][1]();
   }
   $('loadBar').style.width = '100%';
-  setupNPCs(); resetGame(); G.mode = 'attract';
+  setupNPCs(); resetGame(); G.mode = 'attract'; applyQuality(); homeJoy();
   $('loadScreen').hidden = true; $('startScreen').hidden = false; $('bestStart').innerHTML = bestText();
 }
 
@@ -102,7 +105,7 @@ function buildProps(){
   rg.traverse(o => { if (o.isMesh) o.castShadow = true; });
   rope = { mesh: rg, pos: new V3(W.ropeSpot.x, 0.03, W.ropeSpot.z), state: 'ground', holder: null };
   scene.add(rg);
-  leashMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ color: '#b3242a', roughness: 0.6 })); leashMesh.castShadow = true; leashMesh.frustumCulled = false; scene.add(leashMesh);
+  leashMesh = makeLeash('#b3242a', 0.007);
   // pigeons
   const bm = { body: new THREE.MeshStandardMaterial({ color: '#8e939c' }), dark: new THREE.MeshStandardMaterial({ color: '#5c616b' }), neck: new THREE.MeshStandardMaterial({ color: '#4d7a6d', metalness: 0.3, roughness: 0.4 }), beak: new THREE.MeshStandardMaterial({ color: '#3a3333' }) };
   for (let i = 0; i < 12; i++){
@@ -201,31 +204,46 @@ function updateNPCDogs(dt){
     }
     // Luna chases thrown balls sometimes
     if (k === 'luna' && n.state === 'wander' && ball.state === 'flying' && ball.lunaChase){ n.state = 'chaseBall'; s.pose = 'stand'; }
-    PM.animateDog(d, dt, W.getH);
+    const far = dist2(s.pos, camera.position) > 48; d.root.visible = !far;
+    if (!far || (s.cullT = (s.cullT || 0) + dt) > 0.5){ s.cullT = 0; PM.animateDog(d, far ? 0.5 : dt, W.getH); }
   }
   // Franco on the bench, Giulia in the dog area
   franco.st.look = potty.st.pos.clone().setY(0.4); franco.st.pose = 'sit';
-  PM.animateHuman(franco, dt, W.getH);
+  franco.root.visible = dist2(franco.st.pos, camera.position) < 48; if (franco.root.visible) PM.animateHuman(franco, dt, W.getH);
   const gd = dist2(giulia.st.pos, potty.st.pos);
   giulia.st.look = gd < 6 ? potty.st.pos.clone().setY(0.3) : dogs.biscotto.st.pos.clone().setY(0.4);
-  PM.animateHuman(giulia, dt, W.getH);
+  giulia.root.visible = dist2(giulia.st.pos, camera.position) < 48; if (giulia.root.visible) PM.animateHuman(giulia, dt, W.getH);
   // leashes for Pepe and Olivia (held by Franco)
   updateNpcLeash('pepe'); updateNpcLeash('olivia');
 }
 const npcLeash = {};
 function updateNpcLeash(k){
   const d = dogs[k];
-  if (!npcLeash[k]){ npcLeash[k] = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({ color: k === 'pepe' ? '#2b2b2b' : '#d94f6a', roughness: 0.6 })); npcLeash[k].frustumCulled = false; scene.add(npcLeash[k]); }
-  const a = (k === 'pepe' ? franco.handR : franco.handL).getWorldPosition(new V3());
-  const b = d.leashAnchor.getWorldPosition(new V3());
-  setTube(npcLeash[k], a, b, NPC.dogs[k].leash + 0.6, 0.006);
+  if (!npcLeash[k]) npcLeash[k] = makeLeash(k === 'pepe' ? '#2b2b2b' : '#d94f6a', 0.006);
+  const far = dist2(franco.st.pos, camera.position) > 55; npcLeash[k].visible = !far; if (far) return;
+  (k === 'pepe' ? franco.handR : franco.handL).getWorldPosition(_ea); d.leashAnchor.getWorldPosition(_eb);
+  setLeash(npcLeash[k], _ea, _eb, NPC.dogs[k].leash + 0.6);
 }
-function setTube(mesh, a, b, len, r){
+/* A leash is a chain of thin instanced cylinders along a sagging curve: no per-frame geometry allocation. */
+const _ea = new V3(), _eb = new V3();
+const LEASH_N = 14, _lq = new THREE.Quaternion(), _lm = new THREE.Matrix4(), _ls = new V3(), _la = new V3(), _lb = new V3(), _lmid = new V3(), _lp = new V3(), _lprev = new V3(), _lup = new V3(0, 1, 0);
+function makeLeash(color, r){
+  const g = new THREE.CylinderGeometry(r, r, 1, 5, 1, true); g.translate(0, 0.5, 0);
+  const m = new THREE.InstancedMesh(g, new THREE.MeshStandardMaterial({ color, roughness: 0.6 }), LEASH_N);
+  m.frustumCulled = false; scene.add(m); return m;
+}
+function setLeash(im, a, b, len){
   const dd = a.distanceTo(b), sag = Math.max(0.02, (len - dd) * 0.45);
-  const mid = a.clone().lerp(b, 0.5); mid.y -= sag;
-  if (mid.y < 0.02) mid.y = 0.02;
-  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
-  mesh.geometry.dispose(); mesh.geometry = new THREE.TubeGeometry(curve, 18, r, 5, false);
+  _lmid.copy(a).lerp(b, 0.5); _lmid.y = Math.max(0.02, _lmid.y - sag);
+  _lprev.copy(a);
+  for (let i = 1; i <= LEASH_N; i++){
+    const t = i / LEASH_N, u = 1 - t;
+    _lp.set(u * u * a.x + 2 * u * t * _lmid.x + t * t * b.x, u * u * a.y + 2 * u * t * _lmid.y + t * t * b.y, u * u * a.z + 2 * u * t * _lmid.z + t * t * b.z);
+    _lb.copy(_lp).sub(_lprev); const l = _lb.length() || 1e-4;
+    _lq.setFromUnitVectors(_lup, _lb.multiplyScalar(1 / l)); _ls.set(1, l * 1.05, 1);
+    _lm.compose(_lprev, _lq, _ls); im.setMatrixAt(i - 1, _lm); _lprev.copy(_lp);
+  }
+  im.instanceMatrix.needsUpdate = true;
 }
 
 /* ---------- Labels & toasts ---------- */
@@ -247,7 +265,7 @@ function addScore(n, cls, pos){ G.score += n; label('+' + n, 'pop' + (cls ? ' ' 
 
 /* ---------- Input ---------- */
 const keys = new Set(); const input = { x: 0, z: 0, sprint: false, act: false, actPressed: false };
-let joy = null, camDrag = null, manualCamT = 0, camYaw = 0;
+let manualCamT = 0, camYaw = 0;
 addEventListener('keydown', e => {
   if (e.repeat && (e.code === 'Space' || e.code === 'KeyE')) return;
   keys.add(e.code);
@@ -262,20 +280,47 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 const joyEl = $('joy'), knobEl = $('knob');
+const STICK_R = 64;
+let stick = null, look = null, camTilt = 0.18, camDist = 3.4, camRecenter = 0, camOff = 0.2;
+const safe = { t: 0, r: 0, b: 0, l: 0 };
+function readSafe(){
+  const pr = document.createElement('div');
+  pr.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+  document.body.appendChild(pr); const cs = getComputedStyle(pr);
+  safe.t = parseFloat(cs.paddingTop) || 0; safe.r = parseFloat(cs.paddingRight) || 0; safe.b = parseFloat(cs.paddingBottom) || 0; safe.l = parseFloat(cs.paddingLeft) || 0; pr.remove();
+}
+function placeJoy(x, y){ joyEl.style.left = x + 'px'; joyEl.style.top = y + 'px'; }
+function homeJoy(){ readSafe(); const r = STICK_R + 14; placeJoy(Math.max(r + 8, safe.l + r + 14), innerHeight - Math.max(r + 8, safe.b + r + 10)); knobEl.style.transform = ''; joyEl.classList.add('idle'); joyEl.classList.remove('sprint'); }
+function dropTouch(){ stick = null; look = null; if (joyEl) homeJoy(); }
+function updateKnob(){
+  const dx = stick.x - stick.x0, dy = stick.y - stick.y0, L = Math.hypot(dx, dy) / STICK_R, c = Math.max(1, L);
+  knobEl.style.transform = `translate(${dx / c}px,${dy / c}px)`; joyEl.classList.toggle('sprint', L > 1.3);
+}
 canvas.addEventListener('pointerdown', e => {
   PM.audio.init();
   if (G.mode !== 'play') return;
   canvas.focus({ preventScroll: true });
-  if (e.pointerType !== 'mouse' && e.clientX < innerWidth * 0.5 && !joy){ joy = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY }; joyEl.hidden = false; joyEl.style.left = e.clientX + 'px'; joyEl.style.top = e.clientY + 'px'; knobEl.style.transform = ''; $('joyHint').hidden = true; }
-  else if (!camDrag) camDrag = { id: e.pointerId, x: e.clientX };
-  canvas.setPointerCapture(e.pointerId);
+  const touchLike = e.pointerType !== 'mouse';
+  if (touchLike && !stick && e.clientX < innerWidth * 0.5){
+    const r = STICK_R + 12, x = clamp(e.clientX, safe.l + r, innerWidth * 0.5), y = clamp(e.clientY, safe.t + 70 + r, innerHeight - safe.b - r);
+    stick = { id: e.pointerId, x0: x, y0: y, x: e.clientX, y: e.clientY };
+    joyEl.classList.remove('idle'); placeJoy(x, y); $('joyHint').hidden = true; updateKnob();
+  } else if (!look) look = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
 });
-canvas.addEventListener('pointermove', e => {
-  if (joy && e.pointerId === joy.id){ joy.x = e.clientX; joy.y = e.clientY; let dx = joy.x - joy.x0, dy = joy.y - joy.y0; const m = Math.hypot(dx, dy); if (m > 52){ dx *= 52 / m; dy *= 52 / m; } knobEl.style.transform = `translate(${dx}px,${dy}px)`; }
-  else if (camDrag && e.pointerId === camDrag.id){ camYaw -= (e.clientX - camDrag.x) * 0.006; camDrag.x = e.clientX; manualCamT = 1.8; }
-});
-const endPtr = e => { if (joy && e.pointerId === joy.id){ joy = null; joyEl.hidden = true; } if (camDrag && e.pointerId === camDrag.id) camDrag = null; };
-canvas.addEventListener('pointerup', endPtr); canvas.addEventListener('pointercancel', endPtr);
+addEventListener('pointermove', e => {
+  if (stick && e.pointerId === stick.id){ stick.x = e.clientX; stick.y = e.clientY; updateKnob(); }
+  else if (look && e.pointerId === look.id){
+    const dx = e.clientX - look.x, dy = e.clientY - look.y; look.x = e.clientX; look.y = e.clientY;
+    camYaw -= dx * (3.4 / Math.max(320, innerWidth)); camTilt = clamp(camTilt + dy * (1.7 / Math.max(320, innerHeight)), -0.2, 0.9); manualCamT = 2.5; camRecenter = 0;
+  }
+}, { passive: true });
+const endPtr = e => { if (stick && e.pointerId === stick.id){ stick = null; homeJoy(); } if (look && e.pointerId === look.id) look = null; };
+addEventListener('pointerup', endPtr); addEventListener('pointercancel', endPtr);
+addEventListener('touchcancel', dropTouch); addEventListener('blur', dropTouch);
+// no pinch-zoom or context menu while playing
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault()));
+canvas.addEventListener('contextmenu', e => e.preventDefault());
 const barkBtn = $('btnBark'), actBtn = $('btnAct');
 barkBtn.addEventListener('pointerdown', e => { e.preventDefault(); PM.audio.init(); barkBtn.classList.add('down'); if (G.mode === 'play') bark(); });
 let actHeld = false;
@@ -289,9 +334,11 @@ function readInput(){
   if (keys.has('KeyW') || keys.has('ArrowUp')) z += 1; if (keys.has('KeyS') || keys.has('ArrowDown')) z -= 1;
   const m = Math.hypot(x, z); if (m > 1){ x /= m; z /= m; }
   input.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
-  if (joy){ const dx = joy.x - joy.x0, dy = joy.y - joy.y0, mm = Math.hypot(dx, dy); if (mm > 8){ const k = Math.min(1, mm / 52) / mm; x = dx * k; z = -dy * k; input.sprint = mm > 70; } }
+  if (stick){ const dx = stick.x - stick.x0, dy = stick.y - stick.y0, L = Math.hypot(dx, dy) / STICK_R; if (L > 0.12){ const mag = Math.pow(clamp((L - 0.12) / 0.78, 0, 1), 1.1); x = dx / (L * STICK_R) * mag; z = -dy / (L * STICK_R) * mag; input.sprint = L > 1.3; } }
+  if (stickOverride){ x = stickOverride.x; z = stickOverride.z; input.sprint = stickOverride.sprint; }
   input.x = x; input.z = z; input.act = keys.has('KeyE') || keys.has('Enter') || actHeld;
 }
+let stickOverride = null; // only used by the ?debug test hook
 
 /* ---------- Ball ---------- */
 function grabBall(d){ ball.state = 'held'; ball.holder = d; d.st.holding = true; }
@@ -397,6 +444,9 @@ function startAction(a){
 function updateAction(dt){
   const a = P.action, s = potty.st; if (!a) return;
   a.t += dt;
+  if (a.t > 14){ // safety net: no action may last long enough to look like a freeze
+    P.action = null; s.pose = 'stand'; s.tug = 0; s.eyesClosed = 0; marta.st.armR = null; marta.st.armL = null; marta.st.pose = 'stand'; hideRing(); if (rope.state === 'tug'){ rope.state = 'ground'; rope.pos.copy(s.pos).setY(0.03); dogs.biscotto.st.holding = false; dogs.biscotto.st.tug = 0; } return;
+  }
   s.speed = damp(s.speed, 0, 8, dt);
   if (a.type === 'greet'){
     const o = a.npc.dog.st;
@@ -455,7 +505,7 @@ function updateAction(dt){
   } else if (a.type === 'poop'){
     s.pose = 'squat'; s.hunch = 1;
     if (a.t > 1.6 && !a.done){ a.done = true; makePoop(); }
-    if (a.t > 3.0){ P.action = null; s.pose = 'stand'; s.hunch = 0; MS.mode = MS.mode === 'area' ? 'area' : MS.mode; MS.poop = true; MS.poopStage = 'go'; martaSay(pick(['Brava! Prendo il sacchetto.', 'Ecco fatto. Sacchetto!'])); PM.sfx.snort(); }
+    if (a.t > 3.0){ P.action = null; s.pose = 'stand'; s.hunch = 0; MS.mode = MS.mode === 'area' ? 'area' : MS.mode; MS.poop = true; MS.poopStage = 'go'; MS.poopT = 0; martaSay(pick(['Brava! Prendo il sacchetto.', 'Ecco fatto. Sacchetto!'])); PM.sfx.snort(); }
   } else if (a.type === 'sploot'){
     s.pose = 'sploot'; G.fresco = Math.min(100, G.fresco + dt * 8);
     if (a.t > 3){ P.action = null; s.pose = 'stand'; G.fresco = Math.max(G.fresco, 30); }
@@ -601,9 +651,9 @@ function updatePotty(dt){
   if (G.mode === 'play' && !G.ending){
     const shade = W.TREES.some(t => Math.hypot(t.x - s.pos.x, t.z - s.pos.z) < 4.5);
     const sn = s.speed / 3.9;
-    let drain = (shade ? 0.08 : 0.28) + sn * sn * 3.2 + (input.sprint && s.speed > 1 ? 0.8 : 0);
+    let drain = (shade ? 0.05 : 0.16) + sn * sn * 1.5 + (input.sprint && s.speed > 3 ? 1.6 : 0);
     if (P.zoomT > 0) drain = 0;
-    if (s.speed < 0.2 && shade) drain = -0.6;
+    if (s.speed < 0.2) drain = shade ? -1.4 : -0.25;
     if (!inWater) G.fresco = clamp(G.fresco - drain * dt, 0, 100);
     if (G.fresco < 30) hint('hot', 'Potty ha caldo e sbuffa: cerca l\'ombra, la fontanella o la ciotola.');
     if (G.fresco <= 0 && !P.action){ P.action = { type: 'sploot', t: 0 }; toast('Splooting! Potty si spalma sul fresco e non si muove.'); PM.sfx.snort(); if (P.carrying === 'ball'){ dropBall(potty); P.carrying = null; } }
@@ -614,9 +664,9 @@ function updatePotty(dt){
   // the walk to the park
   if (G.mode === 'play' && G.wp < L.ROUTE_WP.length){
     const w = L.ROUTE_WP[G.wp];
-    if (Math.hypot(s.pos.x - w.x, s.pos.z - w.z) < 2.6 || (G.wp >= 2 && s.pos.z < w.z && Math.abs(s.pos.x - w.x) < 6)){
+    if (Math.hypot(s.pos.x - w.x, s.pos.z - w.z) < 2.6 || (G.wp >= 3 && s.pos.z < w.z && Math.abs(s.pos.x - w.x) < 6)){
       G.wp++;
-      const msgs = ['Via Santa Sofia: al semaforo di Corso Italia si aspetta il verde.', 'Corso Italia attraversato! Ora il Parco delle Basiliche, con il campanile di Sant\'Eustorgio.', 'Parco delle Basiliche: tanti alberi da annusare.', 'Ultimo semaforo: via Molino delle Armi.', 'Ecco il Parco Vetra, con la cupola di San Lorenzo!', ''];
+      const msgs = ['', 'Via Santa Sofia: al semaforo di Corso Italia si aspetta il verde.', 'Corso Italia attraversato! Ora il Parco delle Basiliche, con il campanile di Sant\'Eustorgio.', 'Parco delle Basiliche: tanti alberi da annusare.', 'Ultimo semaforo: via Molino delle Armi.', 'Ecco il Parco Vetra, con la cupola di San Lorenzo!', ''];
       if (msgs[G.wp - 1]) toast(msgs[G.wp - 1], 4);
       if (G.wp === L.ROUTE_WP.length){ progress('route'); addScore(10); }
     }
@@ -658,6 +708,8 @@ function updateMarta(dt){
   const d = dist2(s.pos, pp);
   for (const pd of puddles){ pd.t += dt; pd.m.material.opacity = Math.max(0, 0.45 - pd.t * 0.012); }
   if (MS.poop){
+    MS.poopT = (MS.poopT || 0) + dt;
+    if (MS.poopT > 50){ MS.poop = false; MS.poopStage = null; MS.poopT = 0; if (bagMesh) bagMesh.visible = false; s.armR = null; s.pose = 'stand'; if (poopMesh) poopMesh.visible = false; progress('poop'); addScore(8); }
     if (MS.poopStage === 'go'){ if (walkTo(poopMesh.position, 1.6, dt, 0.45) < 0.5){ MS.poopStage = 'pick'; MS.pt = 0; } PM.animateHuman(marta, dt, W.getH); return; }
     if (MS.poopStage === 'pick'){
       MS.pt += dt; s.speed = damp(s.speed, 0, 8, dt); s.pose = 'crouch'; s.armR = poopMesh.position.clone().setY(0.06); s.look = poopMesh.position.clone();
@@ -697,6 +749,7 @@ function updateMarta(dt){
       else s.speed = damp(s.speed, 0, 5, dt);
       if (s.speed < 0.2 && d < 2.4) s.heading = angDamp(s.heading, Math.atan2(pp.x - s.pos.x, pp.z - s.pos.z), 2, dt);
     }
+    if (P.pulling > 0.5 && s.speed < 0.3){ MS.stuckT = (MS.stuckT || 0) + dt; if (MS.stuckT > 2.5){ MS.stuckT = 0; s.pos.set(pp.x - Math.sin(potty.st.heading) * 1.1 + Math.cos(potty.st.heading) * 0.7, 0, pp.z - Math.cos(potty.st.heading) * 1.1 - Math.sin(potty.st.heading) * 0.7); keepWalk(pp, s.pos); } } else MS.stuckT = 0;
     if (P.pulling > 0.5 && MS.sayCd < 0){ MS.sayCd = 7; martaSay(pick(['Piano Potty!', 'Ehi, chi porta a spasso chi?', 'Non tirare!'])); }
   }
   // left hand reaches toward Potty when the leash is taut
@@ -736,6 +789,7 @@ function updateEnding(dt){
   const exit = new V3(L.ENTR.x, 0, L.ENTR.z - 1.5);
   if (E.phase === 'home'){
     if (!P.leashed){ walkTo(potty.st.pos, 2.6, dt); if (dist2(s.pos, potty.st.pos) < 1.0){ P.leashed = true; MS.mode = 'follow'; } return; }
+    if (E.t > 45 && !E.forced){ E.forced = true; martaSay('Ok, basta: ti porto io!'); E.phase = 'pickup'; E.t = 0; return; }
     const resisting = input.act;
     actBtn.disabled = false; actBtn.textContent = 'Pianta le zampe';
     if (resisting){
@@ -776,8 +830,8 @@ function updateEnding(dt){
 function updateLeash(){
   const show = P.leashed && !(G.ending && G.ending.phase === 'carry');
   leashMesh.visible = show; if (!show) return;
-  const a = marta.handL.getWorldPosition(new V3()), b = potty.leashAnchor.getWorldPosition(new V3());
-  setTube(leashMesh, a, b, 2.75, 0.007);
+  marta.handL.getWorldPosition(_ea); potty.leashAnchor.getWorldPosition(_eb);
+  setLeash(leashMesh, _ea, _eb, 2.75);
 }
 
 /* ---------- Camera ---------- */
@@ -794,16 +848,32 @@ function updateCamera(dt){
     const m = marta.st; camPos.set(m.pos.x + Math.sin(m.heading + 0.6) * 2.4, 1.5, m.pos.z + Math.cos(m.heading + 0.6) * 2.4); camLook.set(m.pos.x, 1.1, m.pos.z);
     camera.position.lerp(camPos, 1 - Math.exp(-2 * dt)); camera.lookAt(camLook); return;
   }
-  if (keys.has('KeyQ')){ camYaw += dt * 2.2; manualCamT = 1.8; } if (keys.has('KeyR')){ camYaw -= dt * 2.2; manualCamT = 1.8; }
+  if (keys.has('KeyQ')){ camYaw += dt * 2.2; manualCamT = 2; camRecenter = 0; } if (keys.has('KeyR')){ camYaw -= dt * 2.2; manualCamT = 2; camRecenter = 0; }
   manualCamT -= dt;
   const sp = potty.st.speed;
-  if (manualCamT <= 0 && sp > 0.5 && input.z > -0.3) camYaw = angDamp(camYaw, potty.st.heading + Math.PI, 1.4 * Math.min(1, sp / 2.5), dt);
+  if (camRecenter > 0){
+    camRecenter -= dt; camYaw = angDamp(camYaw, potty.st.heading + Math.PI, 6, dt); camTilt = damp(camTilt, 0.18, 4, dt);
+  } else if (manualCamT <= 0 && sp > 0.4 && input.z > 0.25 && Math.abs(input.x) > 0.08){
+    camYaw -= input.x * 1.05 * clamp(input.z, 0, 1) * dt; // pushing up-and-sideways steers the view like a car, so one thumb is enough
+  }
   const close = P.action && (P.action.type === 'belly' || P.action.type === 'trick' || P.action.type === 'greet');
   const port = camera.aspect < 0.8 ? 1 : 0; // phones held upright: pull back so the dog stays framed
-  const dist = (close ? 2.1 : (P.leashed ? 3.5 : 3.0)) + port * 0.9, ht = (close ? 0.9 : (P.leashed ? 1.85 : 1.45)) + port * 0.55;
-  camPos.set(pp.x + Math.sin(camYaw + 0.22) * dist, ht, pp.z + Math.cos(camYaw + 0.22) * dist);
-  camera.position.lerp(camPos, 1 - Math.exp(-6 * dt));
-  camLook.set(pp.x, 0.45, pp.z);
+  const wantD = (close ? 2.1 : (P.leashed ? 3.7 : 3.1)) + port * 0.9;
+  const baseH = (close ? 0.95 : (P.leashed ? 2.0 : 1.55)) + port * 0.5;
+  const ht = baseH + (camTilt - 0.18) * 2.8;
+  // keep the camera out of buildings: shorten the arm until it stands over a walkable or road area
+  // keep Marta from standing between the camera and Potty: slide the camera to the side
+  const mdx = marta.st.pos.x - pp.x, mdz = marta.st.pos.z - pp.z, sideM = mdx * Math.cos(camYaw) - mdz * Math.sin(camYaw), fwdM = -mdx * Math.sin(camYaw) - mdz * Math.cos(camYaw);
+  const block = clamp(-fwdM / 1.6, 0, 1) * (1 - clamp(Math.abs(sideM) / 1.1, 0, 1));
+  const wantOff = clamp(0.2 - sideM * 0.3, -0.45, 0.55) + block * 0.6 * (sideM >= 0 ? -1 : 1);
+  camOff = damp(camOff, P.leashed ? wantOff : 0.2, 2.2, dt);
+  let allowed = wantD;
+  const ycs = camYaw + camOff;
+  while (allowed > 0.9 && !W.camOK(pp.x + Math.sin(ycs) * allowed, pp.z + Math.cos(ycs) * allowed)) allowed -= 0.25;
+  camDist = damp(camDist, allowed, allowed < camDist ? 14 : 2.2, dt);
+  camPos.set(pp.x + Math.sin(ycs) * camDist, Math.max(0.35, ht * (0.5 + 0.5 * camDist / wantD)), pp.z + Math.cos(ycs) * camDist);
+  camera.position.lerp(camPos, 1 - Math.exp(-9 * dt));
+  camLook.set(pp.x, 0.42 + Math.max(0, camTilt) * 0.12, pp.z);
   camera.lookAt(camLook);
 }
 
@@ -813,6 +883,8 @@ let lastScore = -1;
 function updateHUD(dt){
   if (G.score !== lastScore){ scoreEl.textContent = G.score; lastScore = G.score; }
   frescoEl.style.width = G.fresco.toFixed(1) + '%'; meterEl.classList.toggle('hot', G.fresco < 25);
+  const cr = W.atCrossing(potty.st.pos.x, potty.st.pos.z), lc = $('lightChip');
+  if (cr && !G.ending){ const Lt = W.lights[cr], go = Lt.state === 'green'; lc.hidden = false; lc.classList.toggle('go', go); $('lightTxt').textContent = go ? 'Verde: attraversa! ' + Math.ceil(Lt.t) + ' s' : 'Rosso: aspetta ' + Math.ceil(Lt.t) + ' s'; } else lc.hidden = true;
   const hour = H0 + (H1 - H0) * Math.min(1, G.t / DAY), hh = Math.floor(hour), mm = Math.floor((hour - hh) * 60 / 5) * 5;
   clockEl.textContent = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
   if (hh > G.lastHour){ G.lastHour = hh; PM.sfx.bell(); }
@@ -846,17 +918,35 @@ function updatePointer(){
   const q = target.clone().project(camera); let x = q.x, y = q.y; const behind = q.z > 1;
   if (behind){ x = -x; y = -y; if (Math.abs(x) < 0.01 && Math.abs(y) < 0.01) y = -1; }
   if (!behind && Math.abs(x) < 0.9 && Math.abs(y) < 0.85){ if (cls === 'goal' && dist2(potty.st.pos, target) > 4){ const sx = (x + 1) / 2 * innerWidth, sy = (1 - y) / 2 * innerHeight; pointerEl.hidden = false; pointerEl.className = cls; pointerEl.style.transform = `translate(${sx}px,${sy - 40}px) rotate(${Math.PI / 2}rad)`; return; } pointerEl.hidden = true; return; }
-  const mm = Math.max(Math.abs(x) / 0.86, Math.abs(y) / 0.72); x /= mm; y /= mm;
+  const mm = Math.max(Math.abs(x) / 0.86, y > 0 ? y / 0.55 : -y / 0.72); x /= mm; y /= mm;
   pointerEl.hidden = false; pointerEl.className = cls;
   pointerEl.style.transform = `translate(${(x + 1) / 2 * innerWidth}px,${(1 - y) / 2 * innerHeight}px) rotate(${Math.atan2(-y, x)}rad)`;
 }
 function bestText(){ return G.best > 0 ? 'Record: <b>' + G.best + '</b> cuori' : ''; }
+
+/* ---------- Adaptive quality: lower the render scale (then shadows and grass) when the frame rate drops ---------- */
+const QL = { level: isTouch ? 1 : 0, acc: 0, n: 0, t: 0, calm: 0, noRaise: false };
+function applyQuality(){
+  const base = Math.min(window.devicePixelRatio || 1, isTouch ? 1.5 : 2), f = [1, 0.8, 0.64, 0.5][QL.level];
+  renderer.setPixelRatio(Math.max(0.6, base * f)); resize();
+  if (W){ W.sun.castShadow = QL.level < 3; if (W.grass) W.grass.visible = QL.level < 3; }
+}
+function adaptQuality(dt){
+  if (G.mode !== 'play'){ QL.acc = 0; QL.n = 0; QL.t = 0; return; }
+  QL.acc += dt; QL.n++; QL.t += dt;
+  if (QL.t < 2.5) return;
+  const avg = QL.acc / QL.n; QL.acc = 0; QL.n = 0; QL.t = 0;
+  if (avg > 0.034 && QL.level < 3){ if (QL.calm > 0) QL.noRaise = true; QL.level++; QL.calm = 0; applyQuality(); }
+  else if (avg < 0.019 && QL.level > 0 && !QL.noRaise){ if (++QL.calm >= 4){ QL.level--; QL.calm = 0; applyQuality(); } }
+  else if (avg >= 0.019) QL.calm = 0;
+}
 
 /* ---------- Flow ---------- */
 function resetGame(){
   G.t = 0; G.score = 0; G.fresco = 100; G.wp = 0; G.peeCount = 0; G.redAsk = 0; G.stats = {}; G.ending = null; G.trick = null; G.nextTrick = 30; G.lastHour = 16; G.hintShown = {}; G.toastQ = []; G.toastT = 0;
   toastEl.classList.remove('show');
   resetMissions();
+  dropTouch(); camTilt = 0.18; camDist = 3.4; camRecenter = 0;
   Object.assign(P, { carrying: null, action: null, leashed: true, inArea: false, zoomT: 0, inWater: false, greeted: {}, cuddleCd: 0, pulling: 0, peeT: 0, poopReady: false, poopDone: false });
   puddles.forEach(p => scene.remove(p.m)); puddles.length = 0; if (poopMesh) poopMesh.visible = false; if (bagMesh) bagMesh.visible = false;
   Object.assign(MS, { mode: 'follow', hasBall: true, sayCd: 3, busy: 0, poop: false, poopStage: null });
@@ -871,14 +961,14 @@ function resetGame(){
 }
 function startGame(){
   PM.audio.init(); resetGame(); G.mode = 'play';
-  $('startScreen').hidden = true; $('endScreen').hidden = true; $('pauseScreen').hidden = true; $('hud').hidden = false; $('joyHint').hidden = false;
+  $('startScreen').hidden = true; $('endScreen').hidden = true; $('pauseScreen').hidden = true; $('hud').hidden = false; $('joyHint').hidden = !isTouch; if (isTouch) homeJoy();
   canvas.focus({ preventScroll: true });
   toast('Si esce da piazza Mondadori 2: si va al Parco Vetra! La freccia verde indica la strada.', 4.5);
   const md = $('missions'); md.open = !isTouch; if (!isTouch) setTimeout(() => { if (G.mode === 'play') md.open = false; }, 12000);
   martaSay('Andiamo al parco, Potty!');
 }
 function pause(on){
-  if (on && G.mode === 'play'){ G.mode = 'paused'; $('pauseScreen').hidden = false; keys.clear(); joy = null; joyEl.hidden = true; }
+  if (on && G.mode === 'play'){ G.mode = 'paused'; $('pauseScreen').hidden = false; keys.clear(); actHeld = false; dropTouch(); }
   else if (!on && G.mode === 'paused'){ G.mode = 'play'; $('pauseScreen').hidden = true; canvas.focus({ preventScroll: true }); }
 }
 function showEnd(){
@@ -897,6 +987,7 @@ $('btnAgain').addEventListener('click', startGame);
 $('btnPause').addEventListener('click', () => pause(true));
 $('btnResume').addEventListener('click', () => pause(false));
 $('btnQuit').addEventListener('click', startGame);
+$('btnCam').addEventListener('click', () => { camRecenter = 1.4; manualCamT = 0; });
 $('btnMute').addEventListener('click', () => { PM.audio.init(); PM.audio.setMuted(!PM.audio.muted); $('muteIcon').setAttribute('d', PM.audio.muted ? 'M4 9h4l5-4v14l-5-4H4zM16 9l5 6M21 9l-5 6' : 'M4 9h4l5-4v14l-5-4H4zM16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12'); $('btnMute').setAttribute('aria-label', PM.audio.muted ? 'Attiva l\'audio' : 'Disattiva l\'audio'); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(true); });
 
@@ -925,13 +1016,16 @@ function tick(dt){
   if (G.mode === 'play') updateHUD(dt);
   updateLabels(dt); updatePointer();
 }
+let tickErrors = 0;
 function frame(now){
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (G.mode === 'loading') return;
-  tick(dt);
+  try { tick(dt); adaptQuality(dt); }
+  catch (e){ if (tickErrors++ < 5) console.error('tick', e); if (tickErrors > 600 && G.mode === 'play'){ G.mode = 'paused'; $('pauseScreen').hidden = false; } }
   renderer.render(scene, camera);
 }
 requestAnimationFrame(t => { last = t; frame(t); });
 load().catch(e => { console.error(e); $('loadTxt').textContent = 'Qualcosa è andato storto nel caricamento: ricarica la pagina.'; });
+if (location.search.indexOf('debug') >= 0) window.__pv = { get ball(){ return ball; }, G, P, MS, get potty(){ return potty; }, get marta(){ return marta; }, get dogs(){ return dogs; }, get W(){ return W; }, get camYaw(){ return camYaw; }, get QL(){ return QL; }, get stick(){ return stick; }, get look(){ return look; }, get camTilt(){ return camTilt; }, get camDist(){ return camDist; }, step: n => { for (let i = 0; i < n; i++) tick(1 / 60); }, start: startGame, camera, renderer, scene, NPC, input, keys, setStick: (x, z, sp) => { stickOverride = x == null ? null : { x, z, sprint: !!sp }; }, get tickErrors(){ return tickErrors; } };
 })();
